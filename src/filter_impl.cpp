@@ -44,9 +44,9 @@ XYZ rgb_to_XYZ(rgb rgb) {
 }
 
 CIELAB xyz_to_CIELAB(XYZ xyz) {
-    double x = xyz.X / 95.047;         // référence X de l'illuminant D65
-    double y = xyz.Y / 100.000;        // référence Y de l'illuminant D65
-    double z = xyz.Z / 108.883;        // référence Z de l'illuminant D65
+    double x = xyz.X / 95.047;
+    double y = xyz.Y / 100.000;
+    double z = xyz.Z / 108.883;
 
     x = x > 0.008856 ? pow(x, 1.0/3.0) : (7.787 * x) + (16.0 / 116.0);
     y = y > 0.008856 ? pow(y, 1.0/3.0) : (7.787 * y) + (16.0 / 116.0);
@@ -73,6 +73,7 @@ extern "C" {
             memcpy(first_frame, buffer, 3*height*width*sizeof(uint8_t));
             first = false;
         }
+        double* residual_image = new double[height*width*sizeof(double)];
         for (int y = 0; y < height; ++y)
         {
             rgb* lineptr = (rgb*) (buffer + y * stride);
@@ -81,12 +82,47 @@ extern "C" {
             {
                 CIELAB pixel_lab = rgb_to_CIELAB(lineptr[x]);
                 CIELAB first_lab = rgb_to_CIELAB(first_ptr[x]);
-                double deltaE = sqrt(pow(pixel_lab.L - first_lab.L, 2) + pow(pixel_lab.a - first_lab.a, 2) + pow(pixel_lab.b - first_lab.b, 2));
-                if (deltaE > 10.0) {
-                    lineptr[x].r = 255;
-                    lineptr[x].g = 0;
-                    lineptr[x].b = 0;
+                residual_image[y*width + x] = sqrt(pow(pixel_lab.L - first_lab.L, 2) + pow(pixel_lab.a - first_lab.a, 2) + pow(pixel_lab.b - first_lab.b, 2));
+            }
+        }
+        //ouverture morphologique
+        double* residual_image2 = new double[height*width*sizeof(double)];
+        for (int y = 0; y < height; ++y)
+        {
+            for (int x = 0; x < width; ++x) {
+                double min = 255;
+                for (int i = -1; i < 2; ++i) {
+                    for (int j = -1; j < 2; ++j) {
+                        if (y+i >= 0 && y+i < height && x+j >= 0 && x+j < width) {
+                            if (residual_image[(y+i)*width + x+j] < min) {
+                                min = residual_image[(y+i)*width + x+j];
+                            }
+                        }
+                    }
                 }
+                residual_image2[y*width + x] = min;
+            }
+        }
+        //seillage par hysteresis (seuils 4 et 30)
+        for (int y = 0; y < height; ++y)
+        {
+            for (int x = 0; x < width; ++x) {
+                if (residual_image2[y*width + x] < 4) {
+                    residual_image2[y*width + x] = 0;
+                }
+                else if (residual_image2[y*width + x] > 30) {
+                    residual_image2[y*width + x] = 255;
+                }
+            }
+        }
+
+        for (int y = 0; y < height; ++y)
+        {
+            rgb* lineptr = (rgb*) (buffer + y * stride);
+            for (int x = 0; x < width; ++x)
+            {
+                //input + 0.5 * residual_image2
+                lineptr[x].r += 0.5 * residual_image2[y*width + x];
             }
         }
 
