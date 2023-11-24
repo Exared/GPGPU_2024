@@ -173,7 +173,7 @@ int* hysteresis(double* erosion_dilatation_image, int width, int height, double 
 extern "C" {
     void filter_impl(uint8_t* buffer, int width, int height, int stride, int pixel_stride)
     {
-        /*if (first) {
+        if (first) {
             first_frame = new uint8_t[height*stride*pixel_stride];
             memcpy(first_frame, buffer, height*stride);
             first_frame_lab = convert_image_to_lab((rgb*) first_frame, width, height);
@@ -190,14 +190,8 @@ extern "C" {
             rgb* lineptr = (rgb*) (buffer + y * stride);
             for (int x = 0; x < width; ++x)
             {
-                if (hysteresis_image[y*width + x] == 0) {
-                    lineptr[x].r = 0;
-                    lineptr[x].g = 0;
-                    lineptr[x].b = 0;
-                } else {
+                if (hysteresis_image[y*width + x] == 1) {
                     lineptr[x].r = 255;
-                    lineptr[x].g = 255;
-                    lineptr[x].b = 255;
                 }
             }
         }
@@ -206,7 +200,7 @@ extern "C" {
         delete[] residual_image;
         delete[] errosion_dilatation_image;
         delete[] hysteresis_image;
-        */
+        
         
 
         // You can fake a long-time process with sleep
