@@ -1,4 +1,3 @@
-
 #include <chrono>
 #include <thread>
 #include <iostream>
@@ -20,6 +19,7 @@ struct CIELAB {
 
 
 static uint8_t* first_frame = nullptr;
+static CIELAB* first_frame_lab = nullptr;
 bool first = true;
 
 XYZ rgb_to_XYZ(rgb rgb) {
@@ -65,66 +65,149 @@ CIELAB rgb_to_CIELAB(rgb rgb) {
     return xyz_to_CIELAB(xyz);
 }
 
-extern "C" {
-    void filter_impl(uint8_t* buffer, int width, int height, int stride, int pixel_stride)
+CIELAB* convert_image_to_lab(rgb* rgb_image, int width, int height) {
+    CIELAB* cielab = new CIELAB[height*width];
+    for (int y = 0; y < height; ++y)
     {
-        if (first) {
-            first_frame = new uint8_t[3*height*width*sizeof(uint8_t)];
-            memcpy(first_frame, buffer, 3*height*width*sizeof(uint8_t));
-            first = false;
-        }
-        double* residual_image = new double[height*width*sizeof(double)];
-        for (int y = 0; y < height; ++y)
+        rgb* lineptr = (rgb*) (rgb_image + y * width);
+        for (int x = 0; x < width; ++x)
         {
-            rgb* lineptr = (rgb*) (buffer + y * stride);
-            rgb* first_ptr = (rgb*) (first_frame + y * stride);
-            for (int x = 0; x < width; ++x)
-            {
-                CIELAB pixel_lab = rgb_to_CIELAB(lineptr[x]);
-                CIELAB first_lab = rgb_to_CIELAB(first_ptr[x]);
-                residual_image[y*width + x] = sqrt(pow(pixel_lab.L - first_lab.L, 2) + pow(pixel_lab.a - first_lab.a, 2) + pow(pixel_lab.b - first_lab.b, 2));
+            cielab[y*width + x] = rgb_to_CIELAB(lineptr[x]);
+        }
+    }
+    return cielab;
+}
+
+double* compute_residual_image(CIELAB* background, CIELAB* image, int width, int height) {
+    double* residual_image = new double[height*width];
+    for (int y = 0; y < height; ++y)
+    {
+        for (int x = 0; x < width; ++x) {
+            residual_image[y*width + x] = sqrt(pow(image[y*width + x].L - background[y*width + x].L, 2) + pow(image[y*width + x].a - background[y*width + x].a, 2) + pow(image[y*width + x].b - background[y*width + x].b, 2));
+        }
+    }
+    return residual_image;
+}
+
+double* errosion_dilatation(double* residual_image, int width, int height, int radius) {
+    double* temp_image = new double[width * height];
+    double* output_image = new double[width * height];
+
+    // Érosion
+    for (int y = 0; y < height; ++y) {
+        for (int x = 0; x < width; ++x) {
+            double min_val = std::numeric_limits<double>::max();
+            for (int dy = -radius; dy <= radius; ++dy) {
+                for (int dx = -radius; dx <= radius; ++dx) {
+                    if (x + dx >= 0 && x + dx < width && y + dy >= 0 && y + dy < height && dx * dx + dy * dy <= radius * radius) {
+                        min_val = std::min(min_val, residual_image[(y + dy) * width + (x + dx)]);
+                    }
+                }
+            }
+            temp_image[y * width + x] = min_val;
+        }
+    }
+
+    // Dilatation
+    for (int y = 0; y < height; ++y) {
+        for (int x = 0; x < width; ++x) {
+            double max_val = -std::numeric_limits<double>::max();
+            for (int dy = -radius; dy <= radius; ++dy) {
+                for (int dx = -radius; dx <= radius; ++dx) {
+                    if (x + dx >= 0 && x + dx < width && y + dy >= 0 && y + dy < height && dx * dx + dy * dy <= radius * radius) {
+                        max_val = std::max(max_val, temp_image[(y + dy) * width + (x + dx)]);
+                    }
+                }
+            }
+            output_image[y * width + x] = max_val;
+        }
+    }
+
+    delete[] temp_image;
+    return output_image;
+}
+
+int* hysteresis(double* erosion_dilatation_image, int width, int height, double threshold_low, double threshold_high) {
+    int* output_image = new int[width * height];
+    std::fill_n(output_image, width * height, 0); // Initialise l'image de sortie à zéro
+
+    // Marquer les pixels forts
+    for (int y = 0; y < height; ++y) {
+        for (int x = 0; x < width; ++x) {
+            if (erosion_dilatation_image[y * width + x] >= threshold_high) {
+                output_image[y * width + x] = 1; // Marquer comme fort
             }
         }
-        //ouverture morphologique
-        double* residual_image2 = new double[height*width*sizeof(double)];
-        for (int y = 0; y < height; ++y)
-        {
+    }
+
+    // Propager les pixels forts
+    bool has_changed;
+    do {
+        has_changed = false;
+        for (int y = 0; y < height; ++y) {
             for (int x = 0; x < width; ++x) {
-                double min = 255;
-                for (int i = -1; i < 2; ++i) {
-                    for (int j = -1; j < 2; ++j) {
-                        if (y+i >= 0 && y+i < height && x+j >= 0 && x+j < width) {
-                            if (residual_image[(y+i)*width + x+j] < min) {
-                                min = residual_image[(y+i)*width + x+j];
+                if (output_image[y * width + x] == 1) continue; // Ignorer les pixels déjà forts
+                if (erosion_dilatation_image[y * width + x] < threshold_low) continue; // Ignorer les pixels trop faibles
+
+                // Vérifier les 8 voisins
+                for (int dy = -1; dy <= 1; ++dy) {
+                    for (int dx = -1; dx <= 1; ++dx) {
+                        int nx = x + dx, ny = y + dy;
+                        if (nx >= 0 && nx < width && ny >= 0 && ny < height) {
+                            if (output_image[ny * width + nx] == 1) {
+                                output_image[y * width + x] = 1; // Marquer comme fort
+                                has_changed = true;
+                                break;
                             }
                         }
                     }
-                }
-                residual_image2[y*width + x] = min;
-            }
-        }
-        //seillage par hysteresis (seuils 4 et 30)
-        for (int y = 0; y < height; ++y)
-        {
-            for (int x = 0; x < width; ++x) {
-                if (residual_image2[y*width + x] < 4) {
-                    residual_image2[y*width + x] = 0;
-                }
-                else if (residual_image2[y*width + x] > 30) {
-                    residual_image2[y*width + x] = 255;
+                    if (output_image[y * width + x] == 1) break; // Sortir dès qu'un pixel fort est trouvé
                 }
             }
         }
+    } while (has_changed);
+
+    return output_image;
+}
+
+extern "C" {
+    void filter_impl(uint8_t* buffer, int width, int height, int stride, int pixel_stride)
+    {
+        /*if (first) {
+            first_frame = new uint8_t[height*stride*pixel_stride];
+            memcpy(first_frame, buffer, height*stride);
+            first_frame_lab = convert_image_to_lab((rgb*) first_frame, width, height);
+            first = false;
+        }
+
+        CIELAB* image_lab = convert_image_to_lab((rgb*) buffer, width, height);
+        double* residual_image = compute_residual_image(first_frame_lab, image_lab, width, height);
+        double* errosion_dilatation_image = errosion_dilatation(residual_image, width, height, 3);
+        int* hysteresis_image = hysteresis(errosion_dilatation_image, width, height, 4, 30);
 
         for (int y = 0; y < height; ++y)
         {
             rgb* lineptr = (rgb*) (buffer + y * stride);
             for (int x = 0; x < width; ++x)
             {
-                //input + 0.5 * residual_image2
-                lineptr[x].r += 0.5 * residual_image2[y*width + x];
+                if (hysteresis_image[y*width + x] == 0) {
+                    lineptr[x].r = 0;
+                    lineptr[x].g = 0;
+                    lineptr[x].b = 0;
+                } else {
+                    lineptr[x].r = 255;
+                    lineptr[x].g = 255;
+                    lineptr[x].b = 255;
+                }
             }
         }
+
+        delete[] image_lab;
+        delete[] residual_image;
+        delete[] errosion_dilatation_image;
+        delete[] hysteresis_image;
+        */
+        
 
         // You can fake a long-time process with sleep
         {
