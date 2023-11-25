@@ -35,8 +35,9 @@
 #endif
 
 #include <gst/gst.h>
-#include <gst/video/video.h>
+#include <gst/video/video.h> 
 #include <gst/video/gstvideofilter.h>
+#include <stdio.h>
 #include "gstcudafilter.h"
 #include "filter_impl.h"
 
@@ -220,14 +221,15 @@ gst_cuda_filter_transform_frame (GstVideoFilter * filter, GstVideoFrame * infram
 }
 */
 
+uint8_t* first_frame = NULL;
+int first = 1;
+
 static GstFlowReturn
 gst_cuda_filter_transform_frame_ip (GstVideoFilter * filter, GstVideoFrame * frame)
 {
   GstCudaFilter *cudafilter = GST_CUDA_FILTER (filter);
 
   GST_DEBUG_OBJECT (cudafilter, "transform_frame_ip");
-
-
 
   int width = GST_VIDEO_FRAME_COMP_WIDTH(frame, 0);
   int height = GST_VIDEO_FRAME_COMP_HEIGHT(frame, 0);
@@ -236,7 +238,13 @@ gst_cuda_filter_transform_frame_ip (GstVideoFilter * filter, GstVideoFrame * fra
   int plane_stride = GST_VIDEO_FRAME_PLANE_STRIDE(frame, 0);
   int pixel_stride = GST_VIDEO_FRAME_COMP_PSTRIDE(frame, 0);
 
-  filter_impl(pixels, width, height, plane_stride, pixel_stride);
+  if (first == 1) {
+    first_frame = (uint8_t*)malloc(width * height * 3);
+    memcpy(first_frame, pixels, width * height * 3);
+    first = 0;
+  }
+
+  filter_impl(pixels, width, height, plane_stride, pixel_stride, first_frame);
 
 
 

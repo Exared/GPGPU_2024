@@ -3,7 +3,6 @@
 #include <iostream>
 #include <cstring>
 #include <cmath>
-#include "logo.h"
 
 struct rgb {
     uint8_t r, g, b;
@@ -16,11 +15,6 @@ struct XYZ {
 struct CIELAB {
     double L, a, b;
 };
-
-
-static uint8_t* first_frame = nullptr;
-static CIELAB* first_frame_lab = nullptr;
-bool first = true;
 
 XYZ rgb_to_XYZ(rgb rgb) {
     double r = rgb.r / 255.0;
@@ -66,7 +60,7 @@ CIELAB rgb_to_CIELAB(rgb rgb) {
 }
 
 CIELAB* convert_image_to_lab(rgb* rgb_image, int width, int height) {
-    CIELAB* cielab = new CIELAB[height*width];
+    CIELAB* cielab = (CIELAB*) malloc(width * height * sizeof(CIELAB));
     for (int y = 0; y < height; ++y)
     {
         rgb* lineptr = (rgb*) (rgb_image + y * width);
@@ -93,7 +87,6 @@ double* errosion_dilatation(double* residual_image, int width, int height, int r
     double* temp_image = new double[width * height];
     double* output_image = new double[width * height];
 
-    // Érosion
     for (int y = 0; y < height; ++y) {
         for (int x = 0; x < width; ++x) {
             double min_val = std::numeric_limits<double>::max();
@@ -108,7 +101,6 @@ double* errosion_dilatation(double* residual_image, int width, int height, int r
         }
     }
 
-    // Dilatation
     for (int y = 0; y < height; ++y) {
         for (int x = 0; x < width; ++x) {
             double max_val = -std::numeric_limits<double>::max();
@@ -129,25 +121,23 @@ double* errosion_dilatation(double* residual_image, int width, int height, int r
 
 int* hysteresis(double* erosion_dilatation_image, int width, int height, double threshold_low, double threshold_high) {
     int* output_image = new int[width * height];
-    std::fill_n(output_image, width * height, 0); // Initialise l'image de sortie à zéro
+    std::fill_n(output_image, width * height, 0);
 
-    // Marquer les pixels forts
     for (int y = 0; y < height; ++y) {
         for (int x = 0; x < width; ++x) {
             if (erosion_dilatation_image[y * width + x] >= threshold_high) {
-                output_image[y * width + x] = 1; // Marquer comme fort
+                output_image[y * width + x] = 1;
             }
         }
     }
 
-    // Propager les pixels forts
     bool has_changed;
     do {
         has_changed = false;
         for (int y = 0; y < height; ++y) {
             for (int x = 0; x < width; ++x) {
-                if (output_image[y * width + x] == 1) continue; // Ignorer les pixels déjà forts
-                if (erosion_dilatation_image[y * width + x] < threshold_low) continue; // Ignorer les pixels trop faibles
+                if (output_image[y * width + x] == 1) continue;
+                if (erosion_dilatation_image[y * width + x] < threshold_low) continue;
 
                 // Vérifier les 8 voisins
                 for (int dy = -1; dy <= 1; ++dy) {
@@ -155,13 +145,13 @@ int* hysteresis(double* erosion_dilatation_image, int width, int height, double 
                         int nx = x + dx, ny = y + dy;
                         if (nx >= 0 && nx < width && ny >= 0 && ny < height) {
                             if (output_image[ny * width + nx] == 1) {
-                                output_image[y * width + x] = 1; // Marquer comme fort
+                                output_image[y * width + x] = 1;
                                 has_changed = true;
                                 break;
                             }
                         }
                     }
-                    if (output_image[y * width + x] == 1) break; // Sortir dès qu'un pixel fort est trouvé
+                    if (output_image[y * width + x] == 1) break;
                 }
             }
         }
@@ -170,17 +160,16 @@ int* hysteresis(double* erosion_dilatation_image, int width, int height, double 
     return output_image;
 }
 
+
+
 extern "C" {
-    void filter_impl(uint8_t* buffer, int width, int height, int stride, int pixel_stride)
+    
+
+    void filter_impl(uint8_t* buffer, int width, int height, int stride, int pixel_stride, uint8_t* first_frame)
     {
-        if (first) {
-            first_frame = new uint8_t[height*stride*pixel_stride];
-            memcpy(first_frame, buffer, height*stride);
-            first_frame_lab = convert_image_to_lab((rgb*) first_frame, width, height);
-            first = false;
-        }
 
         CIELAB* image_lab = convert_image_to_lab((rgb*) buffer, width, height);
+        CIELAB* first_frame_lab = convert_image_to_lab((rgb*) first_frame, width, height);
         double* residual_image = compute_residual_image(first_frame_lab, image_lab, width, height);
         double* errosion_dilatation_image = errosion_dilatation(residual_image, width, height, 3);
         int* hysteresis_image = hysteresis(errosion_dilatation_image, width, height, 4, 30);
@@ -197,16 +186,10 @@ extern "C" {
         }
 
         delete[] image_lab;
+        delete[] first_frame_lab;
         delete[] residual_image;
         delete[] errosion_dilatation_image;
         delete[] hysteresis_image;
         
-        
-
-        // You can fake a long-time process with sleep
-        {
-            using namespace std::chrono_literals;
-            //std::this_thread::sleep_for(100ms);
-        }
     }
 }

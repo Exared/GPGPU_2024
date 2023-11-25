@@ -51,7 +51,7 @@ rm -f libgstcudafilter.so
 if [ "$LIB_TYPE" = "cpp" ]; then
     ln -s ./build/libgstcudafilter-cpp.so libgstcudafilter.so
 else
-    ln -s ./build/libgstcudafilter-cuda.so libgstcudafilter.so
+    ln -s ./build/libgstcudafilter-cu.so libgstcudafilter.so
 fi
 
 # Lancement de la chaîne GStreamer
