@@ -167,7 +167,6 @@ extern "C" {
 
     void filter_impl(uint8_t* buffer, int width, int height, int stride, int pixel_stride, uint8_t* first_frame)
     {
-
         CIELAB* image_lab = convert_image_to_lab((rgb*) buffer, width, height);
         CIELAB* first_frame_lab = convert_image_to_lab((rgb*) first_frame, width, height);
         double* residual_image = compute_residual_image(first_frame_lab, image_lab, width, height);

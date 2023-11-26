@@ -163,6 +163,9 @@ gst_cuda_filter_dispose (GObject * object)
   G_OBJECT_CLASS (gst_cuda_filter_parent_class)->dispose (object);
 }
 
+uint8_t* first_frame = NULL;
+int first = 1;
+
 void
 gst_cuda_filter_finalize (GObject * object)
 {
@@ -171,6 +174,9 @@ gst_cuda_filter_finalize (GObject * object)
   GST_DEBUG_OBJECT (cudafilter, "finalize");
 
   /* clean up object here */
+  if (first_frame != NULL) {
+    free(first_frame);
+  }
 
   G_OBJECT_CLASS (gst_cuda_filter_parent_class)->finalize (object);
 }
@@ -221,8 +227,7 @@ gst_cuda_filter_transform_frame (GstVideoFilter * filter, GstVideoFrame * infram
 }
 */
 
-uint8_t* first_frame = NULL;
-int first = 1;
+
 
 static GstFlowReturn
 gst_cuda_filter_transform_frame_ip (GstVideoFilter * filter, GstVideoFrame * frame)
