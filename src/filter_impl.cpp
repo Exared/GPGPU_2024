@@ -160,35 +160,50 @@ int* hysteresis(double* erosion_dilatation_image, int width, int height, double 
     return output_image;
 }
 
+//replace background with the new background based on the new image
+void refresh_background_mean(CIELAB* background, CIELAB* actual_image, int width, int height, int frame_count) {
+    for (int i = 0; i < width * height; ++i) {
+        background[i].L += (actual_image[i].L - background[i].L) / frame_count;
+        background[i].a += (actual_image[i].L - background[i].L) / frame_count;
+        background[i].b += (actual_image[i].L - background[i].L) / frame_count;
+    }
+}
 
+CIELAB* backgroud_image = nullptr;
+bool first_frame_set = false;
+int frame_count = 0;
 
 extern "C" {
-    
 
-    void filter_impl(uint8_t* buffer, int width, int height, int stride, int pixel_stride, uint8_t* first_frame)
+    void filter_impl(uint8_t* buffer, int width, int height, int stride, int pixel_stride)
     {
+        frame_count++;
         CIELAB* image_lab = convert_image_to_lab((rgb*) buffer, width, height);
-        CIELAB* first_frame_lab = convert_image_to_lab((rgb*) first_frame, width, height);
-        double* residual_image = compute_residual_image(first_frame_lab, image_lab, width, height);
-        double* errosion_dilatation_image = errosion_dilatation(residual_image, width, height, 3);
-        int* hysteresis_image = hysteresis(errosion_dilatation_image, width, height, 4, 30);
+        if (!first_frame_set) {
+            backgroud_image = new CIELAB[width * height];
+            memcpy(backgroud_image, image_lab, width * height * sizeof(CIELAB));
+            first_frame_set = true;
+        }
+        else {
+            refresh_background_mean(backgroud_image, image_lab, width, height, frame_count);
+            double* residual_image = compute_residual_image(backgroud_image, image_lab, width, height);
+            double* errosion_dilatation_image = errosion_dilatation(residual_image, width, height, 3);
+            int* hysteresis_image = hysteresis(errosion_dilatation_image, width, height, 4, 30);
 
-        for (int y = 0; y < height; ++y)
-        {
-            rgb* lineptr = (rgb*) (buffer + y * stride);
-            for (int x = 0; x < width; ++x)
+            for (int y = 0; y < height; ++y)
             {
-                if (hysteresis_image[y*width + x] == 1) {
-                    lineptr[x].r = 255;
+                rgb* lineptr = (rgb*) (buffer + y * stride);
+                for (int x = 0; x < width; ++x)
+                {
+                    if (hysteresis_image[y*width + x] == 1) {
+                        lineptr[x].r = 255;
+                    }
                 }
             }
+            delete[] residual_image;
+            delete[] errosion_dilatation_image;
+            delete[] hysteresis_image;
         }
-
         delete[] image_lab;
-        delete[] first_frame_lab;
-        delete[] residual_image;
-        delete[] errosion_dilatation_image;
-        delete[] hysteresis_image;
-        
     }
 }

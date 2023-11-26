@@ -81,7 +81,7 @@ namespace
 }
 
 extern "C" {
-    void filter_impl(uint8_t* src_buffer, int width, int height, int src_stride, int pixel_stride, uint8_t* first_frame)
+    void filter_impl(uint8_t* src_buffer, int width, int height, int src_stride, int pixel_stride)
     {
         load_logo();
 

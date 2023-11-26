@@ -163,9 +163,6 @@ gst_cuda_filter_dispose (GObject * object)
   G_OBJECT_CLASS (gst_cuda_filter_parent_class)->dispose (object);
 }
 
-uint8_t* first_frame = NULL;
-int first = 1;
-
 void
 gst_cuda_filter_finalize (GObject * object)
 {
@@ -174,9 +171,6 @@ gst_cuda_filter_finalize (GObject * object)
   GST_DEBUG_OBJECT (cudafilter, "finalize");
 
   /* clean up object here */
-  if (first_frame != NULL) {
-    free(first_frame);
-  }
 
   G_OBJECT_CLASS (gst_cuda_filter_parent_class)->finalize (object);
 }
@@ -243,15 +237,7 @@ gst_cuda_filter_transform_frame_ip (GstVideoFilter * filter, GstVideoFrame * fra
   int plane_stride = GST_VIDEO_FRAME_PLANE_STRIDE(frame, 0);
   int pixel_stride = GST_VIDEO_FRAME_COMP_PSTRIDE(frame, 0);
 
-  if (first == 1) {
-    first_frame = (uint8_t*)malloc(width * height * 3);
-    memcpy(first_frame, pixels, width * height * 3);
-    first = 0;
-  }
-
-  filter_impl(pixels, width, height, plane_stride, pixel_stride, first_frame);
-
-
+  filter_impl(pixels, width, height, plane_stride, pixel_stride);
 
   return GST_FLOW_OK;
 }
