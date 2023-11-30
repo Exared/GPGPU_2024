@@ -4,6 +4,7 @@
 #include <chrono>
 #include <thread>
 #include <cstdio>
+#include <cfloat>
 
 #define CHECK_CUDA_ERROR(val) check((val), #val, __FILE__, __LINE__)
 template <typename T>
@@ -23,227 +24,305 @@ struct rgb {
     uint8_t r, g, b;
 };
 
-struct XYZ {
-    double X, Y, Z;
+struct lab {
+    float l, a, b;
 };
 
-struct CIELAB {
-    double L, a, b;
+struct xyz {
+    float x, y, z;
 };
 
+__device__ xyz rgb_to_xyz(rgb rgb) {
+    double r = rgb.r / 255.0;
+    double g = rgb.g / 255.0;
+    double b = rgb.b / 255.0;
 
-__global__ void convert_to_cielab_kernel(rgb* src, CIELAB* dest, int width, int height) {
-    int y = blockIdx.y * blockDim.y + threadIdx.y; 
-    int x = blockIdx.x * blockDim.x + threadIdx.x;
+    r = r > 0.04045 ? pow((r + 0.055) / 1.055, 2.4) : r / 12.92;
+    g = g > 0.04045 ? pow((g + 0.055) / 1.055, 2.4) : g / 12.92;
+    b = b > 0.04045 ? pow((b + 0.055) / 1.055, 2.4) : b / 12.92;
 
-    if (x >= width || y >= height)
-        return; 
+    r *= 100.0;
+    g *= 100.0;
+    b *= 100.0;
 
-    rgb* lineptr = (rgb*) ((std::byte*) src + y * width * sizeof(rgb));
-    CIELAB* dest_lineptr = dest + y * width;
-    rgb pixel = lineptr[x];
+    xyz xyz;
+    xyz.x = r * 0.4124 + g * 0.3576 + b * 0.1805;
+    xyz.y = r * 0.2126 + g * 0.7152 + b * 0.0722;
+    xyz.z = r * 0.0193 + g * 0.1192 + b * 0.9505;
 
-    XYZ xyz;
-    xyz.X = 0.412453 * pixel.r + 0.357580 * pixel.g + 0.180423 * pixel.b;
-    xyz.Y = 0.212671 * pixel.r + 0.715160 * pixel.g + 0.072169 * pixel.b;
-    xyz.Z = 0.019334 * pixel.r + 0.119193 * pixel.g + 0.950227 * pixel.b;
-
-    xyz.X /= 255;
-    xyz.Y /= 255;
-    xyz.Z /= 255;
-
-    xyz.X = xyz.X > 0.04045 ? pow((xyz.X + 0.055) / 1.055, 2.4) : xyz.X / 12.92;
-    xyz.Y = xyz.Y > 0.04045 ? pow((xyz.Y + 0.055) / 1.055, 2.4) : xyz.Y / 12.92;
-    xyz.Z = xyz.Z > 0.04045 ? pow((xyz.Z + 0.055) / 1.055, 2.4) : xyz.Z / 12.92;
-
-    xyz.X *= 100;
-    xyz.Y *= 100;
-    xyz.Z *= 100;
-
-    dest_lineptr[x].L = 116 * xyz.Y - 16;
-    dest_lineptr[x].a = 500 * (xyz.X - xyz.Y);
-    dest_lineptr[x].b = 200 * (xyz.Y - xyz.Z);
+    return xyz;
 }
 
-__global__ void compute_residual_kernel(CIELAB* background, CIELAB* current, double* residual, int width, int height) {
-    int y = blockIdx.y * blockDim.y + threadIdx.y; 
-    int x = blockIdx.x * blockDim.x + threadIdx.x;
+__device__ lab xyz_to_lab(xyz xyz) {
+    double x = xyz.x / 95.047;
+    double y = xyz.y / 100.000;
+    double z = xyz.z / 108.883;
 
-    if (x >= width || y >= height)
-        return; 
+    x = x > 0.008856 ? pow(x, 1.0/3.0) : (7.787 * x) + (16.0 / 116.0);
+    y = y > 0.008856 ? pow(y, 1.0/3.0) : (7.787 * y) + (16.0 / 116.0);
+    z = z > 0.008856 ? pow(z, 1.0/3.0) : (7.787 * z) + (16.0 / 116.0);
 
-    CIELAB* background_lineptr = background + y * width;
-    CIELAB* current_lineptr = current + y * width;
-    double* residual_lineptr = residual + y * width;
+    lab lab;
+    lab.l = (116.0 * y) - 16.0;
+    lab.a = 500.0 * (x - y);
+    lab.b = 200.0 * (y - z);
 
-    residual_lineptr[x] = sqrt(pow(background_lineptr[x].L - current_lineptr[x].L, 2) + pow(background_lineptr[x].a - current_lineptr[x].a, 2) + pow(background_lineptr[x].b - current_lineptr[x].b, 2));
+    return lab;
 }
 
-__global__ void erosion_kernel(double* input, double* output, int width, int height, int radius) {
+__device__ lab rgb_to_lab(rgb rgb) {
+    xyz xyz = rgb_to_xyz(rgb);
+    return xyz_to_lab(xyz);
+}
+
+__global__ void convert_to_cielab(std::byte* buffer, int width, int height, int stridein, int strideout, std::byte* output) {
     int y = blockIdx.y * blockDim.y + threadIdx.y; 
     int x = blockIdx.x * blockDim.x + threadIdx.x;
 
     if (x >= width || y >= height)
         return; 
 
-    double* input_lineptr = input + y * width;
-    double* output_lineptr = output + y * width;
+    rgb* lineptr = (rgb*) (buffer + y * stridein);
+    lab* outptr = (lab*) (output + y * strideout);
+    outptr[x] = rgb_to_lab(lineptr[x]);
+}
 
-    double min = 1e9;
-    for (int i = -radius; i <= radius; i++) {
-        for (int j = -radius; j <= radius; j++) {
-            int x2 = x + i;
-            int y2 = y + j;
-            if (x2 >= 0 && x2 < width && y2 >= 0 && y2 < height) {
-                double val = input_lineptr[x2 + y2 * width];
-                if (val < min) {
-                    min = val;
-                }
+__global__ void compute_residual_image(
+    std::byte* buffer1, //lab
+    std::byte* buffer2, //lab
+    std::byte* residual, //float
+    int width,
+    int height,
+    int stride1,//lab stride
+    int stride2) { ///float stride
+    int y = blockIdx.y * blockDim.y + threadIdx.y;
+    int x = blockIdx.x * blockDim.x + threadIdx.x;
+    if (x >= width || y >= height)
+        return;
+    
+    lab *lineptr1 = (lab*) (buffer1 + y * stride1);
+    lab *lineptr2 = (lab*) (buffer2 + y * stride1);
+    float *outptr = (float*) (residual + y * stride2);
+    outptr[x] = sqrtf(powf(lineptr2[x].l - lineptr1[x].l, 2) + powf(lineptr2[x].a - lineptr1[x].a, 2) + powf(lineptr2[x].b - lineptr1[x].b, 2));
+}
+
+// Kernel pour l'érosion
+__global__ void erosion_kernel(
+    float* input,
+    float* output,
+    int width,
+    int height,
+    int stride) {
+    int x = blockIdx.x * blockDim.x + threadIdx.x;
+    int y = blockIdx.y * blockDim.y + threadIdx.y;
+
+    if (x >= width || y >= height)
+        return;
+
+    float minVal = FLT_MAX;
+
+    for (int dy = -1; dy <= 1; ++dy) {
+        for (int dx = -1; dx <= 1; ++dx) {
+            int ix = x + dx;
+            int iy = y + dy;
+            if (ix >= 0 && ix < width && iy >= 0 && iy < height) {
+                float val = input[iy * stride / sizeof(float) + ix];
+                minVal = fminf(minVal, val);
             }
         }
     }
 
-    output_lineptr[x] = min;
+    output[y * stride / sizeof(float) + x] = minVal;
 }
 
-__global__ void dilatation_kernel(double* input, double* output, int width, int height, int radius) {
-    int y = blockIdx.y * blockDim.y + threadIdx.y; 
+// Kernel pour la dilatation
+__global__ void dilatation_kernel(float* input,
+    float* output,
+    int width,
+    int height,
+    int stride) {
     int x = blockIdx.x * blockDim.x + threadIdx.x;
+    int y = blockIdx.y * blockDim.y + threadIdx.y;
 
     if (x >= width || y >= height)
-        return; 
+        return;
 
-    double* input_lineptr = input + y * width;
-    double* output_lineptr = output + y * width;
+    float maxVal = -FLT_MAX;
 
-    double max = -1e9;
-    for (int i = -radius; i <= radius; i++) {
-        for (int j = -radius; j <= radius; j++) {
-            int x2 = x + i;
-            int y2 = y + j;
-            if (x2 >= 0 && x2 < width && y2 >= 0 && y2 < height) {
-                double val = input_lineptr[x2 + y2 * width];
-                if (val > max) {
-                    max = val;
-                }
+    for (int dy = -1; dy <= 1; ++dy) {
+        for (int dx = -1; dx <= 1; ++dx) {
+            int ix = x + dx;
+            int iy = y + dy;
+            if (ix >= 0 && ix < width && iy >= 0 && iy < height) {
+                float val = input[iy * stride / sizeof(float) + ix];
+                maxVal = fmaxf(maxVal, val);
             }
         }
     }
 
-    output_lineptr[x] = max;
+    output[y * stride / sizeof(float) + x] = maxVal;
 }
 
-
-__global__ void hysteresis_kernel(double* input, int* output, int width, int height, double lowThresh, double highThresh) {
-    int y = blockIdx.y * blockDim.y + threadIdx.y; 
+__global__ void hysteresis_threshold_kernel(
+    float* dilatation, 
+    unsigned char* mask, 
+    int width, 
+    int height, 
+    int dilatation_stride,
+    int mask_stride,
+    float low_threshold,
+    float high_threshold) 
+{
     int x = blockIdx.x * blockDim.x + threadIdx.x;
+    int y = blockIdx.y * blockDim.y + threadIdx.y;
 
     if (x >= width || y >= height)
-        return; 
+        return;
 
-    double* input_lineptr = input + y * width;
-    int* output_lineptr = output + y * width;
+    float pixelValue = dilatation[y * dilatation_stride / sizeof(float) + x];
+    unsigned char maskValue = 0;  // Initialisation à 0 (arrière-plan)
 
-    if (input_lineptr[x] > highThresh) {
-        output_lineptr[x] = 1;
-    } else if (input_lineptr[x] < lowThresh) {
-        output_lineptr[x] = 0;
-    } else {
-        bool found = false;
-        for (int i = -1; i <= 1 && !found; i++) {
-            for (int j = -1; j <= 1 && !found; j++) {
-                int x2 = x + i;
-                int y2 = y + j;
-                if (x2 >= 0 && x2 < width && y2 >= 0 && y2 < height) {
-                    if (input_lineptr[x2 + y2 * width] > highThresh) {
-                        output_lineptr[x] = 1;
-                        found = true;
+    // Seuillage d'hystérésis
+    if (pixelValue > high_threshold) {
+        maskValue = 1;  // Premier plan
+    } else if (pixelValue > low_threshold) {
+        // Vérification des voisins pour les valeurs entre les deux seuils
+        for (int dy = -1; dy <= 1; ++dy) {
+            for (int dx = -1; dx <= 1; ++dx) {
+                int ix = x + dx;
+                int iy = y + dy;
+                if (ix >= 0 && ix < width && iy >= 0 && iy < height) {
+                    float neighborValue = dilatation[iy * dilatation_stride / sizeof(float) + ix];
+                    if (neighborValue > high_threshold) {
+                        maskValue = 1;  // Premier plan si connecté à un voisin de premier plan
+                        break;
                     }
                 }
             }
-        }
-        if (!found) {
-            output_lineptr[x] = 0;
+            if (maskValue == 1) break;  // Arrêter la recherche si un voisin de premier plan est trouvé
         }
     }
+
+    mask[y * mask_stride + x] = maskValue;
 }
 
-__global__ void apply_mask_kernel(rgb* image, int* mask, int width, int height) {
-    int y = blockIdx.y * blockDim.y + threadIdx.y; 
+__global__ void apply_mask(
+    std::byte* buffer, 
+    unsigned char* mask, 
+    int width, 
+    int height, 
+    int buffer_stride,
+    int mask_stride) 
+{
     int x = blockIdx.x * blockDim.x + threadIdx.x;
+    int y = blockIdx.y * blockDim.y + threadIdx.y;
 
     if (x >= width || y >= height)
-        return; 
+        return;
 
-    rgb* image_lineptr = image + y * width;
-    int* mask_lineptr = mask + y * width;
-
-    if (mask_lineptr[x] == 0) {
-        image_lineptr[x].r = 0;
-        image_lineptr[x].g = 0;
-        image_lineptr[x].b = 0;
+    rgb* lineptr = (rgb*) (buffer + y * buffer_stride);
+    unsigned char* maskptr = (unsigned char*) (mask + y * mask_stride);
+    if (maskptr[x] == 0) {
+        lineptr[x].r = 0;
+        lineptr[x].g = 0;
+        lineptr[x].b = 0;
     }
     else {
-        image_lineptr[x].r = 255;
-        image_lineptr[x].g = 255;
-        image_lineptr[x].b = 255;
+        lineptr[x].r = 255;
+        lineptr[x].g = 255;
+        lineptr[x].b = 255;
     }
 }
 
-
-//define background
-CIELAB* background = nullptr;
-bool is_first_frame = true;
-int frame_count = 0;
+bool first = true;
+std::byte* first_image_lab;
 
 extern "C" {
     void filter_impl(uint8_t* src_buffer, int width, int height, int src_stride, int pixel_stride)
     {
-        // Allocate memory on the device
-        if (is_first_frame) {
-            CHECK_CUDA_ERROR(cudaMalloc(&background, width * height * sizeof(CIELAB)));
-            is_first_frame = false;
+        assert(sizeof(rgb) == pixel_stride);
+        std::byte* dBuffer;
+        size_t pitch;
+        std::byte* dlabBuffer;
+        size_t labpitch;
+        std::byte* dResidual;
+        size_t residualpitch;
+        std::byte* dErosion;
+        size_t erosionpitch;
+        std::byte* dDilatation;
+        size_t dilatationpitch;
+        std::byte* binary_mask;
+        size_t binary_mask_pitch;
+
+        cudaError_t err;
+
+        dim3 blockSize(16,16);
+        dim3 gridSize((width + (blockSize.x - 1)) / blockSize.x, (height + (blockSize.y - 1)) / blockSize.y);
+
+        // Allocate a buffer on the GPU for the input
+        err = cudaMallocPitch(&dBuffer, &pitch, width * sizeof(rgb), height);
+        CHECK_CUDA_ERROR(err);
+        // Copy the input buffer to the GPU buffer
+        err = cudaMemcpy2D(dBuffer, pitch, src_buffer, src_stride, width * sizeof(rgb), height, cudaMemcpyDefault);
+        CHECK_CUDA_ERROR(err);
+
+        // Allocate a buffer on the GPU for the lab of input
+        err = cudaMallocPitch(&dlabBuffer, &labpitch, width * sizeof(lab), height);
+        CHECK_CUDA_ERROR(err);
+
+        convert_to_cielab<<<gridSize, blockSize>>>(dBuffer, width, height, pitch, labpitch, dlabBuffer);
+        
+        if (first) {
+            //allocate the first image
+            err = cudaMallocPitch(&first_image_lab, &labpitch, width * sizeof(lab), height);
+            CHECK_CUDA_ERROR(err);
+            // copy the lab of the first image to the GPU buffer
+            err = cudaMemcpy2D(first_image_lab, width * sizeof(lab), dlabBuffer, labpitch, width * sizeof(lab), height, cudaMemcpyDefault);
+            CHECK_CUDA_ERROR(err);
+            first = false;
+            cudaFree(dBuffer);
+            cudaFree(dlabBuffer);
+            return;
         }
 
-        // Copy the background to the device
-        CHECK_CUDA_ERROR(cudaMemcpy(background, src_buffer, width * height * sizeof(CIELAB), cudaMemcpyHostToDevice));
+        // Allocate a buffer on the GPU for the residual
+        err = cudaMallocPitch(&dResidual, &residualpitch, width * sizeof(float), height);
+        CHECK_CUDA_ERROR(err);
 
-        // Convert the image to CIELAB
-        dim3 block_size(32, 32);
-        dim3 grid_size((width + block_size.x - 1) / block_size.x, (height + block_size.y - 1) / block_size.y);
-        convert_to_cielab_kernel<<<grid_size, block_size>>>((rgb*) src_buffer, background, width, height);
+        compute_residual_image<<<gridSize, blockSize>>>(first_image_lab, dlabBuffer, dResidual, width, height, labpitch, residualpitch);
+        // Allocate a buffer on the GPU for the erosion
+        err = cudaMallocPitch(&dErosion, &erosionpitch, width * sizeof(float), height);
+        CHECK_CUDA_ERROR(err);
 
-        // Compute the residual
-        double* residual;
-        CHECK_CUDA_ERROR(cudaMalloc(&residual, width * height * sizeof(double)));
-        compute_residual_kernel<<<grid_size, block_size>>>(background, background, residual, width, height);
+        erosion_kernel<<<gridSize, blockSize>>>((float*)dResidual, (float*)dErosion, width, height, residualpitch);
 
-        // Erosion
-        double* erosion;
-        CHECK_CUDA_ERROR(cudaMalloc(&erosion, width * height * sizeof(double)));
-        erosion_kernel<<<grid_size, block_size>>>(residual, erosion, width, height, 1);
+        // Allocate a buffer on the GPU for the dilatation
+        err = cudaMallocPitch(&dDilatation, &dilatationpitch, width * sizeof(float), height);
+        CHECK_CUDA_ERROR(err);
 
-        // Dilatation
-        double* dilatation;
-        CHECK_CUDA_ERROR(cudaMalloc(&dilatation, width * height * sizeof(double)));
-        dilatation_kernel<<<grid_size, block_size>>>(erosion, dilatation, width, height, 1);
+        dilatation_kernel<<<gridSize, blockSize>>>((float*)dErosion, (float*)dDilatation, width, height, erosionpitch);
 
-        // Hysteresis
-        int* mask;
-        CHECK_CUDA_ERROR(cudaMalloc(&mask, width * height * sizeof(int)));
-        hysteresis_kernel<<<grid_size, block_size>>>(dilatation, mask, width, height, 0.1, 0.2);
+        // Allocate a buffer on the GPU for the binary mask
+        err = cudaMallocPitch(&binary_mask, &binary_mask_pitch, width * sizeof(unsigned char), height);
+        CHECK_CUDA_ERROR(err);
 
-        // Apply mask
-        apply_mask_kernel<<<grid_size, block_size>>>((rgb*) src_buffer, mask, width, height);
+        hysteresis_threshold_kernel<<<gridSize, blockSize>>>((float*)dDilatation, (unsigned char*)binary_mask, width, height, dilatationpitch, binary_mask_pitch, 4, 30);
 
-        // Copy the background to the device
-        CHECK_CUDA_ERROR(cudaMemcpy(background, src_buffer, width * height * sizeof(CIELAB), cudaMemcpyHostToDevice));
+        apply_mask<<<gridSize, blockSize>>>(dBuffer, (unsigned char*)binary_mask, width, height, pitch, binary_mask_pitch);
 
-        // Copy the result back to the host
-        CHECK_CUDA_ERROR(cudaMemcpy(src_buffer, background, width * height * sizeof(CIELAB), cudaMemcpyDeviceToHost));
 
-        // Free memory
-        CHECK_CUDA_ERROR(cudaFree(residual));
-        CHECK_CUDA_ERROR(cudaFree(erosion));
+        // Copy the result back to the CPU
+        err = cudaMemcpy2D(src_buffer, src_stride, dBuffer, pitch, width * sizeof(rgb), height, cudaMemcpyDefault);
+        CHECK_CUDA_ERROR(err);
+
+        cudaFree(dBuffer);
+        cudaFree(dlabBuffer);
+        cudaFree(dResidual);
+        cudaFree(dErosion);
+        cudaFree(dDilatation);
+        cudaFree(binary_mask);
+
+        err = cudaDeviceSynchronize();
+        CHECK_CUDA_ERROR(err);
     }   
 }
