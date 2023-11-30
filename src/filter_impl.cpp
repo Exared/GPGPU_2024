@@ -3,6 +3,8 @@
 #include <iostream>
 #include <cstring>
 #include <cmath>
+#include <vector>
+#include <algorithm>
 
 struct rgb {
     uint8_t r, g, b;
@@ -91,9 +93,17 @@ double* errosion_dilatation(double* residual_image, int width, int height, int r
         for (int x = 0; x < width; ++x) {
             double min_val = std::numeric_limits<double>::max();
             for (int dy = -radius; dy <= radius; ++dy) {
-                for (int dx = -radius; dx <= radius; ++dx) {
-                    if (x + dx >= 0 && x + dx < width && y + dy >= 0 && y + dy < height && dx * dx + dy * dy <= radius * radius) {
-                        min_val = std::min(min_val, residual_image[(y + dy) * width + (x + dx)]);
+                int ny = y + dy;
+                if (ny >= 0 && ny < height) {
+                    for (int dx = -radius; dx <= radius; dx += 2) { // Loop unrolling
+                        int nx1 = x + dx;
+                        int nx2 = nx1 + 1;
+                        if (nx1 >= 0 && nx1 < width) {
+                            min_val = std::min(min_val, image[ny * width + nx1]);
+                        }
+                        if (nx2 >= 0 && nx2 < width) {
+                            min_val = std::min(min_val, image[ny * width + nx2]);
+                        }
                     }
                 }
             }
@@ -103,11 +113,24 @@ double* errosion_dilatation(double* residual_image, int width, int height, int r
 
     for (int y = 0; y < height; ++y) {
         for (int x = 0; x < width; ++x) {
+            if (temp_image[y * width + x] == std::numeric_limits<double>::max()) { // Early skip
+                output_image[y * width + x] = temp_image[y * width + x];
+                continue;
+            }
+
             double max_val = -std::numeric_limits<double>::max();
             for (int dy = -radius; dy <= radius; ++dy) {
-                for (int dx = -radius; dx <= radius; ++dx) {
-                    if (x + dx >= 0 && x + dx < width && y + dy >= 0 && y + dy < height && dx * dx + dy * dy <= radius * radius) {
-                        max_val = std::max(max_val, temp_image[(y + dy) * width + (x + dx)]);
+                int ny = y + dy;
+                if (ny >= 0 && ny < height) {
+                    for (int dx = -radius; dx <= radius; dx += 2) { // Loop unrolling
+                        int nx1 = x + dx;
+                        int nx2 = nx1 + 1;
+                        if (nx1 >= 0 && nx1 < width) {
+                            max_val = std::max(max_val, temp_image[ny * width + nx1]);
+                        }
+                        if (nx2 >= 0 && nx2 < width) {
+                            max_val = std::max(max_val, temp_image[ny * width + nx2]);
+                        }
                     }
                 }
             }
@@ -160,6 +183,47 @@ int* hysteresis(double* erosion_dilatation_image, int width, int height, double 
     return output_image;
 }
 
+void update_pixel_history(std::vector<std::vector<CIELAB>>& pixelHistories, const CIELAB& newPixel, int x, int y, int width, int maxHistoryLength) {
+    std::vector<CIELAB>& history = pixelHistories[y * width + x];
+    history.push_back(newPixel);
+    if (history.size() > maxHistoryLength) {
+        history.erase(history.begin());
+    }
+}
+
+bool compareCIELAB(const CIELAB& a, const CIELAB& b) {
+    if (a.L != b.L) return a.L < b.L;
+    if (a.a != b.a) return a.a < b.a;
+    return a.b < b.b;
+}
+
+CIELAB compute_median(std::vector<CIELAB>& history) {
+    if (history.empty()) return {0, 0, 0};  // Handle empty history case
+
+    std::sort(history.begin(), history.end(), compareCIELAB);
+
+    size_t n = history.size();
+    if (n % 2 == 0) {
+        // If even, return the average of the two middle values
+        CIELAB mid1 = history[n / 2 - 1];
+        CIELAB mid2 = history[n / 2];
+        return {(mid1.L + mid2.L) / 2, (mid1.a + mid2.a) / 2, (mid1.b + mid2.b) / 2};
+    } else {
+        // If odd, return the middle value
+        return history[n / 2];
+    }
+}
+
+void refresh_background_median(CIELAB* background, CIELAB* actual_image, int width, int height, std::vector<std::vector<CIELAB>>& pixelHistories, int maxHistoryLength) {
+    for (int y = 0; y < height; ++y) {
+        for (int x = 0; x < width; ++x) {
+            int idx = y * width + x;
+            update_pixel_history(pixelHistories, actual_image[idx], x, y, width, maxHistoryLength);
+            background[idx] = compute_median(pixelHistories[idx]);
+        }
+    }
+}
+
 //replace background with the new background based on the new image
 void refresh_background_mean(CIELAB* background, CIELAB* actual_image, int width, int height, int frame_count) {
     for (int i = 0; i < width * height; ++i) {
@@ -172,6 +236,8 @@ void refresh_background_mean(CIELAB* background, CIELAB* actual_image, int width
 CIELAB* backgroud_image = nullptr;
 bool first_frame_set = false;
 int frame_count = 0;
+std::vector<std::vector<CIELAB>> pixelHistories;
+int maxHistoryLength = 5;
 
 extern "C" {
 
@@ -183,9 +249,12 @@ extern "C" {
             backgroud_image = new CIELAB[width * height];
             memcpy(backgroud_image, image_lab, width * height * sizeof(CIELAB));
             first_frame_set = true;
+
+            // Initialize pixel histories
+            pixelHistories.resize(width * height);
         }
         else {
-            refresh_background_mean(backgroud_image, image_lab, width, height, frame_count);
+            refresh_background_median(backgroud_image, image_lab, width, height, pixelHistories, maxHistoryLength);
             double* residual_image = compute_residual_image(backgroud_image, image_lab, width, height);
             double* errosion_dilatation_image = errosion_dilatation(residual_image, width, height, 3);
             int* hysteresis_image = hysteresis(errosion_dilatation_image, width, height, 4, 30);
@@ -207,3 +276,4 @@ extern "C" {
         delete[] image_lab;
     }
 }
+
