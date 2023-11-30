@@ -75,5 +75,5 @@ fi
 if [ "$LOCAL_EXECUTION" = true ]; then
     gst-launch-1.0 uridecodebin uri=file://$(pwd)/$INPUT_FILE ! videoconvert ! "video/x-raw, format=(string)RGB" ! cudafilter ! videoconvert ! video/x-raw, format=I420 ! x264enc ! mp4mux ! filesink location=$OUTPUT_FILE
 elif [ "$BENCHMARK_MODE" = true ]; then
-    gst-launch-1.0 -e -v uridecodebin uri=file://$(pwd)/$INPUT_FILE ! videoconvert ! "video/x-raw, format=(string)RGB" ! cudafilter ! videoconvert ! fpsdisplaysink video-sink=fakesink sync=false
+    gst-launch-1.0 -v uridecodebin uri=file://$(pwd)/$INPUT_FILE ! videoconvert ! "video/x-raw, format=(string)RGB" ! cudafilter ! videoconvert ! fpsdisplaysink video-sink=fakesink sync=false
 fi
