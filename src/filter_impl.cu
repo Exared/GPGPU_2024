@@ -32,47 +32,42 @@ struct xyz {
     float x, y, z;
 };
 
-__device__ xyz rgb_to_xyz(rgb rgb) {
-    double r = rgb.r / 255.0;
-    double g = rgb.g / 255.0;
-    double b = rgb.b / 255.0;
-
-    r = r > 0.04045 ? __powf((r + 0.055) / 1.055, 2.4) : r / 12.92;
-    g = g > 0.04045 ? __powf((g + 0.055) / 1.055, 2.4) : g / 12.92;
-    b = b > 0.04045 ? __powf((b + 0.055) / 1.055, 2.4) : b / 12.92;
-
-    r *= 100.0;
-    g *= 100.0;
-    b *= 100.0;
-
-    xyz xyz;
-    xyz.x = r * 0.4124 + g * 0.3576 + b * 0.1805;
-    xyz.y = r * 0.2126 + g * 0.7152 + b * 0.0722;
-    xyz.z = r * 0.0193 + g * 0.1192 + b * 0.9505;
-
-    return xyz;
+__device__ inline float adjust_color_component(float c) {
+    return c > 0.04045f ? powf((c + 0.055f) / 1.055f, 2.4f) : c / 12.92f;
 }
 
-__device__ lab xyz_to_lab(xyz xyz) {
-    double x = xyz.x / 95.047;
-    double y = xyz.y / 100.000;
-    double z = xyz.z / 108.883;
-
-    x = x > 0.008856 ? __powf(x, 1.0/3.0) : (7.787 * x) + (16.0 / 116.0);
-    y = y > 0.008856 ? __powf(y, 1.0/3.0) : (7.787 * y) + (16.0 / 116.0);
-    z = z > 0.008856 ? __powf(z, 1.0/3.0) : (7.787 * z) + (16.0 / 116.0);
-
-    lab lab;
-    lab.l = (116.0 * y) - 16.0;
-    lab.a = 500.0 * (x - y);
-    lab.b = 200.0 * (y - z);
-
-    return lab;
+__device__ inline float linearize_color_component(float c) {
+    c *= 100.0f;
+    return c;
 }
 
 __device__ lab rgb_to_lab(rgb rgb) {
-    xyz xyz = rgb_to_xyz(rgb);
-    return xyz_to_lab(xyz);
+    float r = adjust_color_component(rgb.r / 255.0f);
+    float g = adjust_color_component(rgb.g / 255.0f);
+    float b = adjust_color_component(rgb.b / 255.0f);
+
+    r = linearize_color_component(r);
+    g = linearize_color_component(g);
+    b = linearize_color_component(b);
+
+    float x = r * 0.4124f + g * 0.3576f + b * 0.1805f;
+    float y = r * 0.2126f + g * 0.7152f + b * 0.0722f;
+    float z = r * 0.0193f + g * 0.1192f + b * 0.9505f;
+
+    x /= 95.047f;
+    y /= 100.000f;
+    z /= 108.883f;
+
+    x = x > 0.008856f ? powf(x, 1.0f/3.0f) : (7.787f * x) + (16.0f / 116.0f);
+    y = y > 0.008856f ? powf(y, 1.0f/3.0f) : (7.787f * y) + (16.0f / 116.0f);
+    z = z > 0.008856f ? powf(z, 1.0f/3.0f) : (7.787f * z) + (16.0f / 116.0f);
+
+    lab lab;
+    lab.l = (116.0f * y) - 16.0f;
+    lab.a = 500.0f * (x - y);
+    lab.b = 200.0f * (y - z);
+
+    return lab;
 }
 
 __global__ void convert_to_cielab(std::byte* buffer, int width, int height, int stridein, int strideout, std::byte* output) {
@@ -86,6 +81,7 @@ __global__ void convert_to_cielab(std::byte* buffer, int width, int height, int 
     lab* outptr = (lab*) (output + y * strideout);
     outptr[x] = rgb_to_lab(lineptr[x]);
 }
+
 
 __global__ void compute_residual_image(
     std::byte* buffer1, //lab
@@ -103,7 +99,7 @@ __global__ void compute_residual_image(
     lab *lineptr1 = (lab*) (buffer1 + y * stride1);
     lab *lineptr2 = (lab*) (buffer2 + y * stride1);
     float *outptr = (float*) (residual + y * stride2);
-    outptr[x] = sqrt(__powf(lineptr1[x].l - lineptr2[x].l, 2) + __powf(lineptr1[x].a - lineptr2[x].a, 2) + __powf(lineptr1[x].b - lineptr2[x].b, 2));
+    outptr[x] = sqrt(powf(lineptr1[x].l - lineptr2[x].l, 2) + powf(lineptr1[x].a - lineptr2[x].a, 2) + powf(lineptr1[x].b - lineptr2[x].b, 2));
 }
 
 // Kernel pour l'érosion
