@@ -37,9 +37,9 @@ __device__ xyz rgb_to_xyz(rgb rgb) {
     double g = rgb.g / 255.0;
     double b = rgb.b / 255.0;
 
-    r = r > 0.04045 ? pow((r + 0.055) / 1.055, 2.4) : r / 12.92;
-    g = g > 0.04045 ? pow((g + 0.055) / 1.055, 2.4) : g / 12.92;
-    b = b > 0.04045 ? pow((b + 0.055) / 1.055, 2.4) : b / 12.92;
+    r = r > 0.04045 ? __powf((r + 0.055) / 1.055, 2.4) : r / 12.92;
+    g = g > 0.04045 ? __powf((g + 0.055) / 1.055, 2.4) : g / 12.92;
+    b = b > 0.04045 ? __powf((b + 0.055) / 1.055, 2.4) : b / 12.92;
 
     r *= 100.0;
     g *= 100.0;
@@ -58,9 +58,9 @@ __device__ lab xyz_to_lab(xyz xyz) {
     double y = xyz.y / 100.000;
     double z = xyz.z / 108.883;
 
-    x = x > 0.008856 ? pow(x, 1.0/3.0) : (7.787 * x) + (16.0 / 116.0);
-    y = y > 0.008856 ? pow(y, 1.0/3.0) : (7.787 * y) + (16.0 / 116.0);
-    z = z > 0.008856 ? pow(z, 1.0/3.0) : (7.787 * z) + (16.0 / 116.0);
+    x = x > 0.008856 ? __powf(x, 1.0/3.0) : (7.787 * x) + (16.0 / 116.0);
+    y = y > 0.008856 ? __powf(y, 1.0/3.0) : (7.787 * y) + (16.0 / 116.0);
+    z = z > 0.008856 ? __powf(z, 1.0/3.0) : (7.787 * z) + (16.0 / 116.0);
 
     lab lab;
     lab.l = (116.0 * y) - 16.0;
@@ -103,7 +103,7 @@ __global__ void compute_residual_image(
     lab *lineptr1 = (lab*) (buffer1 + y * stride1);
     lab *lineptr2 = (lab*) (buffer2 + y * stride1);
     float *outptr = (float*) (residual + y * stride2);
-    outptr[x] = sqrt(pow(lineptr1[x].l - lineptr2[x].l, 2) + pow(lineptr1[x].a - lineptr2[x].a, 2) + pow(lineptr1[x].b - lineptr2[x].b, 2));
+    outptr[x] = sqrt(__powf(lineptr1[x].l - lineptr2[x].l, 2) + __powf(lineptr1[x].a - lineptr2[x].a, 2) + __powf(lineptr1[x].b - lineptr2[x].b, 2));
 }
 
 // Kernel pour l'érosion
