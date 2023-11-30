@@ -121,8 +121,8 @@ __global__ void erosion_kernel(
 
     float minVal = FLT_MAX;
 
-    for (int dy = -1; dy <= 1; ++dy) {
-        for (int dx = -1; dx <= 1; ++dx) {
+    for (int dy = -3; dy <= 3; ++dy) {
+        for (int dx = -3; dx <= 3; ++dx) {
             int ix = x + dx;
             int iy = y + dy;
             if (ix >= 0 && ix < width && iy >= 0 && iy < height) {
@@ -149,8 +149,8 @@ __global__ void dilatation_kernel(float* input,
 
     float maxVal = -FLT_MAX;
 
-    for (int dy = -1; dy <= 1; ++dy) {
-        for (int dx = -1; dx <= 1; ++dx) {
+    for (int dy = -3; dy <= 3; ++dy) {
+        for (int dx = -3; dx <= 3; ++dx) {
             int ix = x + dx;
             int iy = y + dy;
             if (ix >= 0 && ix < width && iy >= 0 && iy < height) {
@@ -227,34 +227,6 @@ __global__ void apply_mask(
     }
 }
 
-__global__ void debug_apply_naive_mask(
-    std::byte* buffer, 
-    std::byte* residual, 
-    int width, 
-    int height, 
-    int buffer_stride,
-    int residual_stride)
-{
-    int x = blockIdx.x * blockDim.x + threadIdx.x;
-    int y = blockIdx.y * blockDim.y + threadIdx.y;
-
-    if (x >= width || y >= height)
-        return;
-
-    rgb* lineptr = (rgb*) (buffer + y * buffer_stride);
-    float* residualptr = (float*) (residual + y * residual_stride);
-    if (residualptr[x] > 10) {
-        lineptr[x].r = 0;
-        lineptr[x].g = 0;
-        lineptr[x].b = 0;
-    }
-    else {
-        lineptr[x].r = 255;
-        lineptr[x].g = 255;
-        lineptr[x].b = 255;
-    }
-}
-
 int first = 0;
 std::byte* first_image_lab;
 
@@ -302,7 +274,6 @@ extern "C" {
         CHECK_CUDA_ERROR(err);
 
         convert_to_cielab<<<gridSize, blockSize>>>(dBuffer, width, height, pitch, labpitch, dlabBuffer);
-
         // Allocate a buffer on the GPU for the residual
         err = cudaMallocPitch(&dResidual, &residualpitch, width * sizeof(float), height);
         CHECK_CUDA_ERROR(err);
