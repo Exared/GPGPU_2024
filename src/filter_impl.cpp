@@ -11,34 +11,34 @@ struct rgb {
 };
 
 struct XYZ {
-    double X, Y, Z;
+    float X, Y, Z;
 };
 
 struct CIELAB {
-    double L, a, b;
+    float L, a, b;
 };
 
-std::vector<double> createCorrectColorLUT() {
-    std::vector<double> lut(256);
+std::vector<float> createCorrectColorLUT() {
+    std::vector<float> lut(256);
     for (int i = 0; i < 256; ++i) {
-        double c = i / 255.0;
-        lut[i] = c > 0.04045 ? pow((c + 0.055) / 1.055, 2.4) : c / 12.92;
+        float c = i / 255.0f;
+        lut[i] = c > 0.04045f ? powf((c + 0.055f) / 1.055f, 2.4f) : c / 12.92f;
     }
     return lut;
 }
 
 inline XYZ rgb_to_XYZ(rgb rgb) {
-    static const std::vector<double> correctColorLUT = createCorrectColorLUT();
+    static const std::vector<float> correctColorLUT = createCorrectColorLUT();
 
-    double r = correctColorLUT[rgb.r] * 100.0;
-    double g = correctColorLUT[rgb.g] * 100.0;
-    double b = correctColorLUT[rgb.b] * 100.0;
+    float r = correctColorLUT[rgb.r] * 100.0f;
+    float g = correctColorLUT[rgb.g] * 100.0f;
+    float b = correctColorLUT[rgb.b] * 100.0f;
 
     // Direct computation
     XYZ xyz = {
-            r * 0.4124 + g * 0.3576 + b * 0.1805,
-            r * 0.2126 + g * 0.7152 + b * 0.0722,
-            r * 0.0193 + g * 0.1192 + b * 0.9505
+            r * 0.4124f + g * 0.3576f + b * 0.1805f,
+            r * 0.2126f + g * 0.7152f + b * 0.0722f,
+            r * 0.0193f + g * 0.1192f + b * 0.9505f
     };
 
     return xyz;
@@ -46,13 +46,13 @@ inline XYZ rgb_to_XYZ(rgb rgb) {
 
 inline CIELAB xyz_to_CIELAB(XYZ xyz) {
     // Precompute division
-    double x = xyz.X / 95.047;
-    double y = xyz.Y / 100.0;
-    double z = xyz.Z / 108.883;
+    float x = xyz.X / 95.047f;
+    float y = xyz.Y / 100.0f;
+    float z = xyz.Z / 108.883f;
 
     // Using a lambda for the repeated operation
-    auto f = [](double t) -> double {
-        return t > 0.008856 ? pow(t, 1.0 / 3.0) : (7.787 * t) + (16.0 / 116.0);
+    auto f = [](float t) -> float {
+        return t > 0.008856f ? powf(t, 1.0f / 3.0f) : (7.787f * t) + (16.0f / 116.0f);
     };
 
     x = f(x);
@@ -61,9 +61,9 @@ inline CIELAB xyz_to_CIELAB(XYZ xyz) {
 
     // Direct computation
     CIELAB lab = {
-            (116.0 * y) - 16.0,
-            500.0 * (x - y),
-            200.0 * (y - z)
+            (116.0f * y) - 16.0f,
+            500.0f * (x - y),
+            200.0f * (y - z)
     };
 
     return lab;
@@ -82,28 +82,28 @@ inline CIELAB* convert_image_to_lab(const rgb* rgb_image, int width, int height)
     return cielab;
 }
 
-double* compute_residual_image(CIELAB* background, CIELAB* image, int width, int height) {
-    double* residual_image = new double[height * width];
+float* compute_residual_image(CIELAB* background, CIELAB* image, int width, int height) {
+    float* residual_image = new float[height * width];
     for (int y = 0; y < height; ++y) {
         for (int x = 0; x < width; ++x) {
             int idx = y * width + x;
-            double dL = image[idx].L - background[idx].L;
-            double da = image[idx].a - background[idx].a;
-            double db = image[idx].b - background[idx].b;
+            float dL = image[idx].L - background[idx].L;
+            float da = image[idx].a - background[idx].a;
+            float db = image[idx].b - background[idx].b;
             residual_image[idx] = sqrt(dL * dL + da * da + db * db);
         }
     }
     return residual_image;
 }
 
-double* erosion_dilatation(double* residual_image, int width, int height, int radius) {
-    double* temp_image = new double[width * height];
-    double* output_image = new double[width * height];
+float* erosion_dilatation(float* residual_image, int width, int height, int radius) {
+    float* temp_image = new float[width * height];
+    float* output_image = new float[width * height];
 
     // Erosion
     for (int y = 0; y < height; ++y) {
         for (int x = 0; x < width; ++x) {
-            double min_val = std::numeric_limits<double>::max();
+            float min_val = std::numeric_limits<float>::max();
             for (int dy = -radius; dy <= radius; ++dy) {
                 int ny = y + dy;
                 if (ny >= 0 && ny < height) {
@@ -126,12 +126,12 @@ double* erosion_dilatation(double* residual_image, int width, int height, int ra
     // Dilatation
     for (int y = 0; y < height; ++y) {
         for (int x = 0; x < width; ++x) {
-            if (temp_image[y * width + x] == std::numeric_limits<double>::max()) { // Early skip
+            if (temp_image[y * width + x] == std::numeric_limits<float>::max()) { // Early skip
                 output_image[y * width + x] = temp_image[y * width + x];
                 continue;
             }
 
-            double max_val = -std::numeric_limits<double>::max();
+            float max_val = -std::numeric_limits<float>::max();
             for (int dy = -radius; dy <= radius; ++dy) {
                 int ny = y + dy;
                 if (ny >= 0 && ny < height) {
@@ -155,7 +155,7 @@ double* erosion_dilatation(double* residual_image, int width, int height, int ra
     return output_image;
 }
 
-int* hysteresis(double* erosion_dilatation_image, int width, int height, double threshold_low, double threshold_high) {
+int* hysteresis(float* erosion_dilatation_image, int width, int height, float threshold_low, float threshold_high) {
     int* output_image = new int[width * height];
     std::fill_n(output_image, width * height, 0);
 
@@ -268,8 +268,8 @@ void filter_impl(uint8_t* buffer, int width, int height, int stride, int pixel_s
     }
     else {
         refresh_background_median(backgroud_image, image_lab, width, height, pixelHistories, maxHistoryLength);
-        double* residual_image = compute_residual_image(backgroud_image, image_lab, width, height);
-        double* erosion_dilatation_image = erosion_dilatation(residual_image, width, height, 3);
+        float* residual_image = compute_residual_image(backgroud_image, image_lab, width, height);
+        float* erosion_dilatation_image = erosion_dilatation(residual_image, width, height, 3);
         int* hysteresis_image = hysteresis(erosion_dilatation_image, width, height, 4, 30);
 
         for (int y = 0; y < height; ++y)
