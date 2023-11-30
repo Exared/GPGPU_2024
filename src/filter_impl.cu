@@ -227,8 +227,31 @@ __global__ void apply_mask(
     }
 }
 
+__global__ void recompute_mean_background(
+    std::byte* background, 
+    std::byte* buffer,
+    int width, 
+    int height, 
+    int background_stride,
+    int buffer_stride,
+    int frame_count) 
+{
+    int x = blockIdx.x * blockDim.x + threadIdx.x;
+    int y = blockIdx.y * blockDim.y + threadIdx.y;
+
+    if (x >= width || y >= height)
+        return;
+
+    lab* background_lineptr = (lab*) (background + y * background_stride);
+    lab* buffer_lineptr = (lab*) (buffer + y * buffer_stride);
+    background_lineptr[x].l = (background_lineptr[x].l * (frame_count - 1) + buffer_lineptr[x].l) / frame_count;
+    background_lineptr[x].a = (background_lineptr[x].a * (frame_count - 1) + buffer_lineptr[x].a) / frame_count;
+    background_lineptr[x].b = (background_lineptr[x].b * (frame_count - 1) + buffer_lineptr[x].b) / frame_count;
+}
+
 int first = 0;
 std::byte* first_image_lab;
+int frame_count = 0;
 
 extern "C" {
     void filter_impl(uint8_t* src_buffer, int width, int height, int src_stride, int pixel_stride)
@@ -248,6 +271,7 @@ extern "C" {
         size_t binary_mask_pitch;
 
         cudaError_t err;
+        frame_count++;
 
         dim3 blockSize(16,16);
         dim3 gridSize((width + (blockSize.x - 1)) / blockSize.x, (height + (blockSize.y - 1)) / blockSize.y);
@@ -274,6 +298,9 @@ extern "C" {
         CHECK_CUDA_ERROR(err);
 
         convert_to_cielab<<<gridSize, blockSize>>>(dBuffer, width, height, pitch, labpitch, dlabBuffer);
+
+        recompute_mean_background<<<gridSize, blockSize>>>(first_image_lab, dlabBuffer, width, height, labpitch, labpitch, frame_count);
+
         // Allocate a buffer on the GPU for the residual
         err = cudaMallocPitch(&dResidual, &residualpitch, width * sizeof(float), height);
         CHECK_CUDA_ERROR(err);
