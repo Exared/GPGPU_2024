@@ -103,7 +103,7 @@ __global__ void compute_residual_image(
     lab *lineptr1 = (lab*) (buffer1 + y * stride1);
     lab *lineptr2 = (lab*) (buffer2 + y * stride1);
     float *outptr = (float*) (residual + y * stride2);
-    outptr[x] = sqrtf(powf(lineptr2[x].l - lineptr1[x].l, 2) + powf(lineptr2[x].a - lineptr1[x].a, 2) + powf(lineptr2[x].b - lineptr1[x].b, 2));
+    outptr[x] = sqrt(pow(lineptr1[x].l - lineptr2[x].l, 2) + pow(lineptr1[x].a - lineptr2[x].a, 2) + pow(lineptr1[x].b - lineptr2[x].b, 2));
 }
 
 // Kernel pour l'érosion
@@ -222,7 +222,28 @@ __global__ void apply_mask(
 
     rgb* lineptr = (rgb*) (buffer + y * buffer_stride);
     unsigned char* maskptr = (unsigned char*) (mask + y * mask_stride);
-    if (maskptr[x] == 0) {
+    if (maskptr[x] == 1) {
+        lineptr[x].r = 255;
+    }
+}
+
+__global__ void debug_apply_naive_mask(
+    std::byte* buffer, 
+    std::byte* residual, 
+    int width, 
+    int height, 
+    int buffer_stride,
+    int residual_stride)
+{
+    int x = blockIdx.x * blockDim.x + threadIdx.x;
+    int y = blockIdx.y * blockDim.y + threadIdx.y;
+
+    if (x >= width || y >= height)
+        return;
+
+    rgb* lineptr = (rgb*) (buffer + y * buffer_stride);
+    float* residualptr = (float*) (residual + y * residual_stride);
+    if (residualptr[x] > 10) {
         lineptr[x].r = 0;
         lineptr[x].g = 0;
         lineptr[x].b = 0;
@@ -234,7 +255,7 @@ __global__ void apply_mask(
     }
 }
 
-bool first = true;
+int first = 0;
 std::byte* first_image_lab;
 
 extern "C" {
@@ -265,31 +286,29 @@ extern "C" {
         // Copy the input buffer to the GPU buffer
         err = cudaMemcpy2D(dBuffer, pitch, src_buffer, src_stride, width * sizeof(rgb), height, cudaMemcpyDefault);
         CHECK_CUDA_ERROR(err);
+        
+        if (first == 0) {
+            //allocate the first image
+            err = cudaMallocPitch(&first_image_lab, &labpitch, width * sizeof(lab), height);
+            CHECK_CUDA_ERROR(err);
+            convert_to_cielab<<<gridSize, blockSize>>>(dBuffer, width, height, pitch, labpitch, first_image_lab);
+            first = 1;
+            cudaFree(dBuffer);
+            return;
+        }
 
-        // Allocate a buffer on the GPU for the lab of input
+        // Allocate a buffer on the GPU for the input
         err = cudaMallocPitch(&dlabBuffer, &labpitch, width * sizeof(lab), height);
         CHECK_CUDA_ERROR(err);
 
         convert_to_cielab<<<gridSize, blockSize>>>(dBuffer, width, height, pitch, labpitch, dlabBuffer);
-        
-        if (first) {
-            //allocate the first image
-            err = cudaMallocPitch(&first_image_lab, &labpitch, width * sizeof(lab), height);
-            CHECK_CUDA_ERROR(err);
-            // copy the lab of the first image to the GPU buffer
-            err = cudaMemcpy2D(first_image_lab, width * sizeof(lab), dlabBuffer, labpitch, width * sizeof(lab), height, cudaMemcpyDefault);
-            CHECK_CUDA_ERROR(err);
-            first = false;
-            cudaFree(dBuffer);
-            cudaFree(dlabBuffer);
-            return;
-        }
 
         // Allocate a buffer on the GPU for the residual
         err = cudaMallocPitch(&dResidual, &residualpitch, width * sizeof(float), height);
         CHECK_CUDA_ERROR(err);
 
         compute_residual_image<<<gridSize, blockSize>>>(first_image_lab, dlabBuffer, dResidual, width, height, labpitch, residualpitch);
+        
         // Allocate a buffer on the GPU for the erosion
         err = cudaMallocPitch(&dErosion, &erosionpitch, width * sizeof(float), height);
         CHECK_CUDA_ERROR(err);
@@ -309,8 +328,7 @@ extern "C" {
         hysteresis_threshold_kernel<<<gridSize, blockSize>>>((float*)dDilatation, (unsigned char*)binary_mask, width, height, dilatationpitch, binary_mask_pitch, 4, 30);
 
         apply_mask<<<gridSize, blockSize>>>(dBuffer, (unsigned char*)binary_mask, width, height, pitch, binary_mask_pitch);
-
-
+        
         // Copy the result back to the CPU
         err = cudaMemcpy2D(src_buffer, src_stride, dBuffer, pitch, width * sizeof(rgb), height, cudaMemcpyDefault);
         CHECK_CUDA_ERROR(err);
